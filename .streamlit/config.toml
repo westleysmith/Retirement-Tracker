@@ -1,0 +1,13 @@
+# Pocket Check brand theme
+[theme]
+primaryColor = "#2ecc71"
+backgroundColor = "#f9fafb"
+secondaryBackgroundColor = "#ffffff"
+textColor = "#1a1a2e"
+font = "sans serif"
+
+[server]
+# Allow the app to bind to localhost explicitly; works around firewalls
+# that intercept LAN-style 0.0.0.0 binds. Override with --server.address if needed.
+address = "127.0.0.1"
+headless = true

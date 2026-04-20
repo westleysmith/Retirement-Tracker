@@ -20,13 +20,21 @@ from models import (
     default_scenario,
 )
 from simulation import ReturnModel, run_simulation
+import branding
 
 
 SCENARIOS_DIR = Path(__file__).parent / "scenarios"
 SCENARIOS_DIR.mkdir(exist_ok=True)
 
 
-st.set_page_config(page_title="Retirement Tracker", layout="wide")
+st.set_page_config(
+    page_title="Retirement Tracker · Pocket Check",
+    page_icon="🟢",
+    layout="wide",
+)
+st.markdown(branding.CUSTOM_CSS, unsafe_allow_html=True)
+st.markdown(branding.NAV_HTML, unsafe_allow_html=True)
+
 st.title("Retirement Tracker")
 st.caption(
     "Monte Carlo projection in real (today's) dollars. "
@@ -273,25 +281,36 @@ fig.add_trace(go.Scatter(
 fig.add_trace(go.Scatter(
     x=paths["age"], y=paths["p10"],
     mode="lines", line=dict(width=0), fill="tonexty",
-    fillcolor="rgba(99,110,250,0.2)", name="10-90% range",
+    fillcolor=branding.PLOT_FILL, name="10-90% range",
 ))
 fig.add_trace(go.Scatter(
     x=paths["age"], y=paths["p50"],
-    mode="lines", line=dict(width=3, color="#636EFA"), name="Median",
+    mode="lines", line=dict(width=3, color=branding.PLOT_PRIMARY), name="Median",
 ))
-fig.add_vline(x=inputs.retirement_age, line_dash="dash", line_color="gray",
-              annotation_text="Retirement", annotation_position="top")
+fig.add_vline(x=inputs.retirement_age, line_dash="dash",
+              line_color=branding.NAVY,
+              annotation_text="Retirement", annotation_position="top",
+              annotation_font_color=branding.NAVY)
 fig.update_layout(
     height=450, xaxis_title="Age", yaxis_title="Portfolio value (today's $)",
     hovermode="x unified",
+    plot_bgcolor=branding.WHITE, paper_bgcolor=branding.WHITE,
+    font=dict(color=branding.TEXT),
+    xaxis=dict(gridcolor=branding.BORDER),
+    yaxis=dict(gridcolor=branding.BORDER),
 )
 st.plotly_chart(fig, use_container_width=True)
 
 st.subheader("Final balance distribution")
 hist = go.Figure()
-hist.add_trace(go.Histogram(x=final, nbinsx=60, marker_color="#636EFA"))
+hist.add_trace(go.Histogram(x=final, nbinsx=60, marker_color=branding.PLOT_ACCENT))
 hist.update_layout(
     height=350, xaxis_title="Final balance (today's $)", yaxis_title="Simulation count",
+    plot_bgcolor=branding.WHITE, paper_bgcolor=branding.WHITE,
+    font=dict(color=branding.TEXT),
+    xaxis=dict(gridcolor=branding.BORDER),
+    yaxis=dict(gridcolor=branding.BORDER),
+    bargap=0.02,
 )
 st.plotly_chart(hist, use_container_width=True)
 
@@ -301,10 +320,15 @@ with st.expander("Salary by age"):
         sfig = go.Figure()
         sfig.add_trace(go.Scatter(
             x=salary_df["age"], y=salary_df["salary"],
-            mode="lines+markers", line=dict(color="#00CC96"),
+            mode="lines+markers", line=dict(color=branding.PLOT_PRIMARY, width=3),
+            marker=dict(color=branding.PLOT_ACCENT, size=8),
         ))
         sfig.update_layout(
             height=300, xaxis_title="Age", yaxis_title="Salary (today's $)",
+            plot_bgcolor=branding.WHITE, paper_bgcolor=branding.WHITE,
+            font=dict(color=branding.TEXT),
+            xaxis=dict(gridcolor=branding.BORDER),
+            yaxis=dict(gridcolor=branding.BORDER),
         )
         st.plotly_chart(sfig, use_container_width=True)
     else:
@@ -322,3 +346,5 @@ with st.expander("Assumptions and limitations"):
 - **Social Security:** fixed real annual benefit starting at claim age.
 - **Not modeled:** health shocks, variable spending, Roth conversions, RMD-forced withdrawals.
 """)
+
+st.markdown(branding.FOOTER_HTML, unsafe_allow_html=True)
