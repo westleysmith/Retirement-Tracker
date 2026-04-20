@@ -37,15 +37,19 @@ st.caption(
 
 def _career_stages_to_df(stages: list[CareerStage]) -> pd.DataFrame:
     if not stages:
-        return pd.DataFrame(columns=[
-            "start_age", "title", "salary", "contribution_pct", "employer_match_pct"
-        ])
+        return pd.DataFrame({
+            "start_age": pd.Series(dtype="int64"),
+            "title": pd.Series(dtype="object"),
+            "salary": pd.Series(dtype="float64"),
+            "contribution_pct": pd.Series(dtype="float64"),
+            "employer_match_pct": pd.Series(dtype="float64"),
+        })
     return pd.DataFrame([{
-        "start_age": s.start_age,
+        "start_age": int(s.start_age),
         "title": s.title,
-        "salary": s.salary,
-        "contribution_pct": s.contribution_pct,
-        "employer_match_pct": s.employer_match_pct,
+        "salary": float(s.salary),
+        "contribution_pct": float(s.contribution_pct),
+        "employer_match_pct": float(s.employer_match_pct),
     } for s in stages])
 
 
@@ -76,14 +80,27 @@ def _save_scenario(name: str, inputs: ScenarioInputs) -> None:
     path.write_text(json.dumps(inputs.to_dict(), indent=2))
 
 
+def _reset_career_editor(source_df: pd.DataFrame) -> None:
+    """Set a new source df for the editor and clear stale widget state."""
+    st.session_state.career_df_source = source_df
+    if "career_editor" in st.session_state:
+        del st.session_state["career_editor"]
+
+
 # ---------------------------------------------------------------------------
-# Session state: initialize once, then let widgets mutate it directly.
+# Session state: initialize once, never mutate the source df below.
+#
+# The source df for data_editor MUST be stable across reruns. If we reassign
+# it to the editor's return value each render, Streamlit's widget state gets
+# reconciled against a moving baseline and in-flight edits flicker/revert.
+# Instead we freeze the source and read the current state from data_editor's
+# return value (available only below the widget in the render order).
 # ---------------------------------------------------------------------------
 if "inputs" not in st.session_state:
     st.session_state.inputs = default_scenario()
 
-if "career_df" not in st.session_state:
-    st.session_state.career_df = _career_stages_to_df(
+if "career_df_source" not in st.session_state:
+    st.session_state.career_df_source = _career_stages_to_df(
         st.session_state.inputs.career_stages
     )
 
@@ -91,28 +108,9 @@ inputs: ScenarioInputs = st.session_state.inputs
 
 
 # ---------------------------------------------------------------------------
-# Sidebar: basics, balances, retirement, allocation, simulation settings
+# Sidebar: everything EXCEPT the career editor and scenario save/load
 # ---------------------------------------------------------------------------
 with st.sidebar:
-    st.header("Scenario")
-    existing = sorted(p.stem for p in SCENARIOS_DIR.glob("*.json"))
-    scenario_name = st.text_input("Name", value="my_plan")
-    c1, c2 = st.columns(2)
-    with c1:
-        if st.button("Save", use_container_width=True):
-            inputs.career_stages = _df_to_career_stages(st.session_state.career_df)
-            _save_scenario(scenario_name, inputs)
-            st.success(f"Saved `{scenario_name}`")
-    with c2:
-        load_choice = st.selectbox("Load", [""] + existing, label_visibility="collapsed")
-        if st.button("Load", use_container_width=True) and load_choice:
-            loaded = _load_scenario(load_choice)
-            if loaded:
-                st.session_state.inputs = loaded
-                st.session_state.career_df = _career_stages_to_df(loaded.career_stages)
-                st.rerun()
-    st.divider()
-
     st.header("Basics")
     inputs.current_age = st.number_input("Current age", 16, 90, inputs.current_age)
     inputs.retirement_age = st.number_input(
@@ -181,20 +179,17 @@ with st.sidebar:
 
 # ---------------------------------------------------------------------------
 # Career stages editor
-#
-# The dataframe lives in st.session_state.career_df and the data_editor both
-# reads from and writes to it via its key. This prevents the "edit reverts
-# to previous value" bug caused by rebuilding the source df on every rerun.
 # ---------------------------------------------------------------------------
 st.subheader("Career stages")
 st.caption(
-    "One row per phase of your career. Salary is flat within a stage "
-    "in today's dollars. For a raise or role change, add another row at "
-    "that age. Press Enter or Tab after editing a cell to commit the change."
+    "One row per phase of your career. Salary is flat within a stage in today's "
+    "dollars. For a raise or role change, add another row at that age. "
+    "Press Tab or Enter after editing a cell to commit the change before "
+    "clicking buttons."
 )
 
-career_df = st.data_editor(
-    st.session_state.career_df,
+edited_career_df = st.data_editor(
+    st.session_state.career_df_source,
     num_rows="dynamic",
     use_container_width=True,
     key="career_editor",
@@ -218,16 +213,36 @@ career_df = st.data_editor(
         ),
     },
 )
-st.session_state.career_df = career_df
 
 
 # ---------------------------------------------------------------------------
-# Run simulation
+# Scenario save/load and Run button (below editor so they see edited_career_df)
 # ---------------------------------------------------------------------------
-run = st.button("Run simulation", type="primary", use_container_width=True)
+col_run, col_save, col_load = st.columns([2, 1, 1])
+
+with col_run:
+    run = st.button("Run simulation", type="primary", use_container_width=True)
+
+with col_save:
+    scenario_name = st.text_input("Scenario name", value="my_plan", label_visibility="collapsed")
+    if st.button("Save scenario", use_container_width=True):
+        inputs.career_stages = _df_to_career_stages(edited_career_df)
+        _save_scenario(scenario_name, inputs)
+        st.success(f"Saved `{scenario_name}`")
+
+with col_load:
+    existing = sorted(p.stem for p in SCENARIOS_DIR.glob("*.json"))
+    load_choice = st.selectbox("Load", [""] + existing, label_visibility="collapsed")
+    if st.button("Load scenario", use_container_width=True) and load_choice:
+        loaded = _load_scenario(load_choice)
+        if loaded:
+            st.session_state.inputs = loaded
+            _reset_career_editor(_career_stages_to_df(loaded.career_stages))
+            st.rerun()
+
 
 if run:
-    inputs.career_stages = _df_to_career_stages(st.session_state.career_df)
+    inputs.career_stages = _df_to_career_stages(edited_career_df)
     with st.spinner(f"Running {inputs.num_simulations:,} simulations..."):
         result = run_simulation(inputs, ReturnModel())
     st.session_state.result = result
@@ -280,7 +295,7 @@ hist.update_layout(
 )
 st.plotly_chart(hist, use_container_width=True)
 
-with st.expander("Salary and contributions by age"):
+with st.expander("Salary by age"):
     salary_df = paths[paths["salary"] > 0][["age", "salary"]]
     if not salary_df.empty:
         sfig = go.Figure()
@@ -293,7 +308,7 @@ with st.expander("Salary and contributions by age"):
         )
         st.plotly_chart(sfig, use_container_width=True)
     else:
-        st.caption("No working years projected (retirement age reached).")
+        st.caption("No working years projected from current age.")
 
 with st.expander("Assumptions and limitations"):
     st.markdown("""
