@@ -26,13 +26,63 @@ import branding
 SCENARIOS_DIR = Path(__file__).parent / "scenarios"
 SCENARIOS_DIR.mkdir(exist_ok=True)
 
+NUM_SIMULATIONS = 10_000
 
+
+# ---------------------------------------------------------------------------
+# Risk-profile presets
+#
+# Three target-date-style glide paths from Conservative (bond-heavy) through
+# Balanced (industry-standard default) to Aggressive (growth-focused).
+# Each preset defines both the current allocation and the retirement-age
+# allocation; the simulator linearly interpolates between them.
+# ---------------------------------------------------------------------------
+ALLOCATION_PRESETS: dict[str, dict] = {
+    "Conservative": {
+        "now":         AssetAllocation(0.50, 0.45, 0.05),
+        "retirement":  AssetAllocation(0.30, 0.65, 0.05),
+        "description": "Lower volatility, bond-heavy. Prioritizes capital preservation over growth.",
+    },
+    "Balanced": {
+        "now":         AssetAllocation(0.80, 0.15, 0.05),
+        "retirement":  AssetAllocation(0.55, 0.40, 0.05),
+        "description": "Industry-standard target-date glide path. A reasonable default for most people.",
+    },
+    "Aggressive": {
+        "now":         AssetAllocation(0.95, 0.04, 0.01),
+        "retirement":  AssetAllocation(0.70, 0.25, 0.05),
+        "description": "Growth-focused. Higher expected return with higher volatility through retirement.",
+    },
+}
+
+
+def _match_risk_profile(alloc_now: AssetAllocation, alloc_ret: AssetAllocation) -> str:
+    """Return the preset whose allocations are closest to the given pair."""
+    best_name, best_dist = "Balanced", float("inf")
+    for name, preset in ALLOCATION_PRESETS.items():
+        dist = (
+            abs(preset["now"].stocks - alloc_now.stocks)
+            + abs(preset["retirement"].stocks - alloc_ret.stocks)
+        )
+        if dist < best_dist:
+            best_name, best_dist = name, dist
+    return best_name
+
+
+# ---------------------------------------------------------------------------
+# Page config + theming
+# ---------------------------------------------------------------------------
 st.set_page_config(
     page_title="Retirement Tracker · Pocket Check",
     page_icon="🟢",
     layout="wide",
 )
-st.markdown(branding.CUSTOM_CSS, unsafe_allow_html=True)
+
+# Theme mode must be resolved before CSS is injected.
+if "pc_theme" not in st.session_state:
+    st.session_state.pc_theme = "Auto"
+
+st.markdown(branding.build_css(st.session_state.pc_theme), unsafe_allow_html=True)
 st.markdown(branding.NAV_HTML, unsafe_allow_html=True)
 
 st.title("Retirement Tracker")
@@ -44,6 +94,8 @@ st.caption(
 
 
 def _career_stages_to_df(stages: list[CareerStage]) -> pd.DataFrame:
+    """Build the editor dataframe. Percent columns are displayed on a 0-100
+    scale so they read naturally; the model stores them as 0.0-1.0."""
     if not stages:
         return pd.DataFrame({
             "start_age": pd.Series(dtype="int64"),
@@ -56,8 +108,8 @@ def _career_stages_to_df(stages: list[CareerStage]) -> pd.DataFrame:
         "start_age": int(s.start_age),
         "title": s.title,
         "salary": float(s.salary),
-        "contribution_pct": float(s.contribution_pct),
-        "employer_match_pct": float(s.employer_match_pct),
+        "contribution_pct": float(s.contribution_pct) * 100.0,
+        "employer_match_pct": float(s.employer_match_pct) * 100.0,
     } for s in stages])
 
 
@@ -70,8 +122,8 @@ def _df_to_career_stages(df: pd.DataFrame) -> list[CareerStage]:
             start_age=int(row["start_age"]),
             title=str(row.get("title", "") or ""),
             salary=float(row["salary"]),
-            contribution_pct=float(row.get("contribution_pct", 0.15) or 0.15),
-            employer_match_pct=float(row.get("employer_match_pct", 0.05) or 0.05),
+            contribution_pct=float(row.get("contribution_pct", 15.0) or 15.0) / 100.0,
+            employer_match_pct=float(row.get("employer_match_pct", 5.0) or 5.0) / 100.0,
         ))
     return sorted(out, key=lambda s: s.start_age)
 
@@ -89,20 +141,13 @@ def _save_scenario(name: str, inputs: ScenarioInputs) -> None:
 
 
 def _reset_career_editor(source_df: pd.DataFrame) -> None:
-    """Set a new source df for the editor and clear stale widget state."""
     st.session_state.career_df_source = source_df
     if "career_editor" in st.session_state:
         del st.session_state["career_editor"]
 
 
 # ---------------------------------------------------------------------------
-# Session state: initialize once, never mutate the source df below.
-#
-# The source df for data_editor MUST be stable across reruns. If we reassign
-# it to the editor's return value each render, Streamlit's widget state gets
-# reconciled against a moving baseline and in-flight edits flicker/revert.
-# Instead we freeze the source and read the current state from data_editor's
-# return value (available only below the widget in the render order).
+# Session state init
 # ---------------------------------------------------------------------------
 if "inputs" not in st.session_state:
     st.session_state.inputs = default_scenario()
@@ -116,7 +161,7 @@ inputs: ScenarioInputs = st.session_state.inputs
 
 
 # ---------------------------------------------------------------------------
-# Sidebar: everything EXCEPT the career editor and scenario save/load
+# Sidebar
 # ---------------------------------------------------------------------------
 with st.sidebar:
     st.header("Basics")
@@ -158,31 +203,44 @@ with st.sidebar:
         "SS claim age", 62, 70, int(inputs.social_security_claim_age)
     )
 
-    st.subheader("Allocation")
-    a1, a2, a3 = st.columns(3)
-    with a1:
-        s_now = st.slider("Stocks now", 0.0, 1.0, inputs.allocation_now.stocks, 0.05)
-    with a2:
-        b_now = st.slider("Bonds now", 0.0, 1.0, inputs.allocation_now.bonds, 0.05)
-    with a3:
-        c_now = st.slider("Cash now", 0.0, 1.0, inputs.allocation_now.cash, 0.05)
-    inputs.allocation_now = AssetAllocation(s_now, b_now, c_now).normalized()
-
-    b1, b2, b3 = st.columns(3)
-    with b1:
-        s_ret = st.slider("Stocks @ ret.", 0.0, 1.0, inputs.allocation_at_retirement.stocks, 0.05)
-    with b2:
-        b_ret = st.slider("Bonds @ ret.", 0.0, 1.0, inputs.allocation_at_retirement.bonds, 0.05)
-    with b3:
-        c_ret = st.slider("Cash @ ret.", 0.0, 1.0, inputs.allocation_at_retirement.cash, 0.05)
-    inputs.allocation_at_retirement = AssetAllocation(s_ret, b_ret, c_ret).normalized()
-
-    st.subheader("Simulation")
-    inputs.num_simulations = st.select_slider(
-        "Simulations", [1_000, 2_500, 5_000, 10_000, 20_000], value=inputs.num_simulations
+    st.subheader("Risk profile")
+    default_profile = _match_risk_profile(
+        inputs.allocation_now, inputs.allocation_at_retirement
     )
-    seed_val = st.number_input("Random seed (0 = random)", 0, 2**31 - 1, 0)
-    inputs.seed = None if seed_val == 0 else int(seed_val)
+    risk_profile = st.radio(
+        "Risk profile",
+        list(ALLOCATION_PRESETS.keys()),
+        index=list(ALLOCATION_PRESETS.keys()).index(default_profile),
+        horizontal=True,
+        label_visibility="collapsed",
+    )
+    preset = ALLOCATION_PRESETS[risk_profile]
+    inputs.allocation_now = preset["now"]
+    inputs.allocation_at_retirement = preset["retirement"]
+
+    def _fmt_alloc(a: AssetAllocation) -> str:
+        return f"{a.stocks * 100:.0f}% stocks / {a.bonds * 100:.0f}% bonds / {a.cash * 100:.0f}% cash"
+
+    st.caption(preset["description"])
+    st.caption(f"**Now:** {_fmt_alloc(preset['now'])}")
+    st.caption(f"**At retirement:** {_fmt_alloc(preset['retirement'])}")
+
+    st.divider()
+    st.subheader("Appearance")
+    theme_choice = st.radio(
+        "Theme",
+        ["Auto", "Light", "Dark"],
+        index=["Auto", "Light", "Dark"].index(st.session_state.pc_theme),
+        horizontal=True,
+        label_visibility="collapsed",
+    )
+    if theme_choice != st.session_state.pc_theme:
+        st.session_state.pc_theme = theme_choice
+        st.rerun()
+
+    # Simulation settings held constant: 10k sims, random seed.
+    inputs.num_simulations = NUM_SIMULATIONS
+    inputs.seed = None
 
 
 # ---------------------------------------------------------------------------
@@ -212,19 +270,19 @@ edited_career_df = st.data_editor(
             help="Gross annual salary in today's dollars.",
         ),
         "contribution_pct": st.column_config.NumberColumn(
-            "Contribution %", min_value=0.0, max_value=0.90, step=0.01, format="%.2f",
-            help="Your savings rate (e.g. 0.15 = 15%). Assumes you save enough to get the full match.",
+            "Contribution %", min_value=0.0, max_value=90.0, step=1.0, format="%d%%",
+            help="Your savings rate as a percent (e.g. 15 = 15%). Assumes you save enough to get the full match.",
         ),
         "employer_match_pct": st.column_config.NumberColumn(
-            "Employer match %", min_value=0.0, max_value=0.50, step=0.01, format="%.2f",
-            help="Percent of salary your employer contributes (e.g. 0.05 = 5%).",
+            "Employer match %", min_value=0.0, max_value=15.0, step=0.5, format="%.1f%%",
+            help="Percent of salary your employer contributes (e.g. 5 = 5%). Most employers are in the 3-6% range.",
         ),
     },
 )
 
 
 # ---------------------------------------------------------------------------
-# Scenario save/load and Run button (below editor so they see edited_career_df)
+# Run / Save / Load
 # ---------------------------------------------------------------------------
 col_run, col_save, col_load = st.columns([2, 1, 1])
 
@@ -251,7 +309,7 @@ with col_load:
 
 if run:
     inputs.career_stages = _df_to_career_stages(edited_career_df)
-    with st.spinner(f"Running {inputs.num_simulations:,} simulations..."):
+    with st.spinner(f"Running {NUM_SIMULATIONS:,} simulations..."):
         result = run_simulation(inputs, ReturnModel())
     st.session_state.result = result
 
@@ -261,6 +319,10 @@ if result is None:
     st.info("Adjust inputs and click **Run simulation**.")
     st.stop()
 
+
+# ---------------------------------------------------------------------------
+# Results
+# ---------------------------------------------------------------------------
 success = result["success_rate"]
 final = result["final_balances"]
 paths = result["paths_df"]
@@ -272,6 +334,8 @@ m2.metric("Median final balance", f"${np.median(final):,.0f}")
 m3.metric("10th percentile final", f"${np.percentile(final, 10):,.0f}")
 m4.metric("90th percentile final", f"${np.percentile(final, 90):,.0f}")
 
+plot = branding.plot_tokens(st.session_state.pc_theme)
+
 st.subheader("Portfolio trajectory (real dollars)")
 fig = go.Figure()
 fig.add_trace(go.Scatter(
@@ -281,35 +345,37 @@ fig.add_trace(go.Scatter(
 fig.add_trace(go.Scatter(
     x=paths["age"], y=paths["p10"],
     mode="lines", line=dict(width=0), fill="tonexty",
-    fillcolor=branding.PLOT_FILL, name="10-90% range",
+    fillcolor=plot["fill"], name="10-90% range",
 ))
 fig.add_trace(go.Scatter(
     x=paths["age"], y=paths["p50"],
-    mode="lines", line=dict(width=3, color=branding.PLOT_PRIMARY), name="Median",
+    mode="lines", line=dict(width=3, color=plot["primary"]), name="Median",
 ))
-fig.add_vline(x=inputs.retirement_age, line_dash="dash",
-              line_color=branding.NAVY,
-              annotation_text="Retirement", annotation_position="top",
-              annotation_font_color=branding.NAVY)
+fig.add_vline(
+    x=inputs.retirement_age, line_dash="dash",
+    line_color=plot["font_color"],
+    annotation_text="Retirement", annotation_position="top",
+    annotation_font_color=plot["font_color"],
+)
 fig.update_layout(
     height=450, xaxis_title="Age", yaxis_title="Portfolio value (today's $)",
     hovermode="x unified",
-    plot_bgcolor=branding.WHITE, paper_bgcolor=branding.WHITE,
-    font=dict(color=branding.TEXT),
-    xaxis=dict(gridcolor=branding.BORDER),
-    yaxis=dict(gridcolor=branding.BORDER),
+    plot_bgcolor=plot["plot_bg"], paper_bgcolor=plot["paper_bg"],
+    font=dict(color=plot["font_color"]),
+    xaxis=dict(gridcolor=plot["grid"]),
+    yaxis=dict(gridcolor=plot["grid"]),
 )
 st.plotly_chart(fig, use_container_width=True)
 
 st.subheader("Final balance distribution")
 hist = go.Figure()
-hist.add_trace(go.Histogram(x=final, nbinsx=60, marker_color=branding.PLOT_ACCENT))
+hist.add_trace(go.Histogram(x=final, nbinsx=60, marker_color=plot["accent"]))
 hist.update_layout(
     height=350, xaxis_title="Final balance (today's $)", yaxis_title="Simulation count",
-    plot_bgcolor=branding.WHITE, paper_bgcolor=branding.WHITE,
-    font=dict(color=branding.TEXT),
-    xaxis=dict(gridcolor=branding.BORDER),
-    yaxis=dict(gridcolor=branding.BORDER),
+    plot_bgcolor=plot["plot_bg"], paper_bgcolor=plot["paper_bg"],
+    font=dict(color=plot["font_color"]),
+    xaxis=dict(gridcolor=plot["grid"]),
+    yaxis=dict(gridcolor=plot["grid"]),
     bargap=0.02,
 )
 st.plotly_chart(hist, use_container_width=True)
@@ -320,15 +386,16 @@ with st.expander("Salary by age"):
         sfig = go.Figure()
         sfig.add_trace(go.Scatter(
             x=salary_df["age"], y=salary_df["salary"],
-            mode="lines+markers", line=dict(color=branding.PLOT_PRIMARY, width=3),
-            marker=dict(color=branding.PLOT_ACCENT, size=8),
+            mode="lines+markers",
+            line=dict(color=plot["primary"], width=3),
+            marker=dict(color=plot["accent"], size=8),
         ))
         sfig.update_layout(
             height=300, xaxis_title="Age", yaxis_title="Salary (today's $)",
-            plot_bgcolor=branding.WHITE, paper_bgcolor=branding.WHITE,
-            font=dict(color=branding.TEXT),
-            xaxis=dict(gridcolor=branding.BORDER),
-            yaxis=dict(gridcolor=branding.BORDER),
+            plot_bgcolor=plot["plot_bg"], paper_bgcolor=plot["paper_bg"],
+            font=dict(color=plot["font_color"]),
+            xaxis=dict(gridcolor=plot["grid"]),
+            yaxis=dict(gridcolor=plot["grid"]),
         )
         st.plotly_chart(sfig, use_container_width=True)
     else:
