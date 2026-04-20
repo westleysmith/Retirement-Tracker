@@ -6,7 +6,6 @@ Run with:
 from __future__ import annotations
 
 import json
-import uuid
 from pathlib import Path
 
 import numpy as np
@@ -86,43 +85,39 @@ st.caption(
 )
 
 
-def _new_id() -> str:
-    """Short stable id for a career-row's widget keys."""
-    return uuid.uuid4().hex[:8]
-
-
-def _stage_to_row(s: CareerStage) -> dict:
-    """Build a row dict for the custom editor. Percents are on a 0-100 scale
-    in the row; the model stores them as 0.0-1.0."""
-    return {
-        "id": _new_id(),
+def _career_stages_to_df(stages: list[CareerStage]) -> pd.DataFrame:
+    """Build the editor dataframe. Percent columns are displayed on a 0-100
+    scale; the model stores them as 0.0-1.0."""
+    if not stages:
+        return pd.DataFrame({
+            "start_age": pd.Series(dtype="int64"),
+            "title": pd.Series(dtype="object"),
+            "salary": pd.Series(dtype="float64"),
+            "contribution_pct": pd.Series(dtype="float64"),
+            "employer_match_pct": pd.Series(dtype="float64"),
+        })
+    return pd.DataFrame([{
         "start_age": int(s.start_age),
         "title": s.title,
         "salary": float(s.salary),
         "contribution_pct": float(s.contribution_pct) * 100.0,
         "employer_match_pct": float(s.employer_match_pct) * 100.0,
-    }
+    } for s in stages])
 
 
-def _row_to_stage(row: dict) -> CareerStage:
-    return CareerStage(
-        start_age=int(row["start_age"]),
-        title=str(row.get("title", "") or ""),
-        salary=float(row["salary"]),
-        contribution_pct=float(row.get("contribution_pct", 15.0)) / 100.0,
-        employer_match_pct=float(row.get("employer_match_pct", 5.0)) / 100.0,
-    )
-
-
-def _default_row(age_hint: int = 30) -> dict:
-    return {
-        "id": _new_id(),
-        "start_age": int(age_hint),
-        "title": "",
-        "salary": 60_000.0,
-        "contribution_pct": 15.0,
-        "employer_match_pct": 5.0,
-    }
+def _df_to_career_stages(df: pd.DataFrame) -> list[CareerStage]:
+    out = []
+    for _, row in df.iterrows():
+        if pd.isna(row.get("start_age")) or pd.isna(row.get("salary")):
+            continue
+        out.append(CareerStage(
+            start_age=int(row["start_age"]),
+            title=str(row.get("title", "") or ""),
+            salary=float(row["salary"]),
+            contribution_pct=float(row.get("contribution_pct", 15.0) or 15.0) / 100.0,
+            employer_match_pct=float(row.get("employer_match_pct", 5.0) or 5.0) / 100.0,
+        ))
+    return sorted(out, key=lambda s: s.start_age)
 
 
 def _load_scenario(name: str) -> ScenarioInputs | None:
@@ -137,14 +132,11 @@ def _save_scenario(name: str, inputs: ScenarioInputs) -> None:
     path.write_text(json.dumps(inputs.to_dict(), indent=2))
 
 
-def _reset_career_list(stages: list[CareerStage]) -> None:
-    """Rebuild career_list from a CareerStage list and clear any widget
-    state tied to the old IDs so loaded values display correctly."""
-    old_ids = [r["id"] for r in st.session_state.get("career_list", [])]
-    st.session_state.career_list = [_stage_to_row(s) for s in stages]
-    for rid in old_ids:
-        for prefix in ("age_", "title_", "salary_", "contrib_", "match_"):
-            st.session_state.pop(f"{prefix}{rid}", None)
+def _reset_career_editor(source_df: pd.DataFrame) -> None:
+    """Set a new source df for the editor and clear stale widget state."""
+    st.session_state.career_df_source = source_df
+    if "career_editor" in st.session_state:
+        del st.session_state["career_editor"]
 
 
 # ---------------------------------------------------------------------------
@@ -155,8 +147,8 @@ if "inputs" not in st.session_state:
 
 inputs: ScenarioInputs = st.session_state.inputs
 
-if "career_list" not in st.session_state:
-    st.session_state.career_list = [_stage_to_row(s) for s in inputs.career_stages]
+if "career_df_source" not in st.session_state:
+    st.session_state.career_df_source = _career_stages_to_df(inputs.career_stages)
 
 # Widget-backed session_state for risk profile - initialized from the
 # current scenario so loading preserves the selection.
@@ -186,21 +178,21 @@ with st.sidebar:
     st.subheader("Current balances")
     inputs.balance_taxable = st.number_input(
         "Taxable brokerage", 0.0, 1e9,
-        float(inputs.balance_taxable), step=1000.0, format="%.0f",
+        float(inputs.balance_taxable), step=1000.0, format="$%.0f",
     )
     inputs.balance_tax_deferred = st.number_input(
         "Tax-deferred (401k/IRA)", 0.0, 1e9,
-        float(inputs.balance_tax_deferred), step=1000.0, format="%.0f",
+        float(inputs.balance_tax_deferred), step=1000.0, format="$%.0f",
     )
     inputs.balance_tax_free = st.number_input(
         "Tax-free (Roth/HSA)", 0.0, 1e9,
-        float(inputs.balance_tax_free), step=1000.0, format="%.0f",
+        float(inputs.balance_tax_free), step=1000.0, format="$%.0f",
     )
 
     st.subheader("Retirement")
     inputs.annual_retirement_spending = st.number_input(
         "Annual spending (today's $)", 0.0, 1e7,
-        float(inputs.annual_retirement_spending), step=1000.0, format="%.0f",
+        float(inputs.annual_retirement_spending), step=1000.0, format="$%.0f",
     )
     inputs.retirement_tax_rate = st.slider(
         "Effective retirement tax rate", 0.0, 0.50,
@@ -208,7 +200,7 @@ with st.sidebar:
     )
     inputs.social_security_annual = st.number_input(
         "Social Security (annual, today's $)", 0.0, 200_000.0,
-        float(inputs.social_security_annual), step=500.0, format="%.0f",
+        float(inputs.social_security_annual), step=500.0, format="$%.0f",
     )
     inputs.social_security_claim_age = st.number_input(
         "SS claim age", 62, 70, int(inputs.social_security_claim_age), format="%d",
@@ -239,96 +231,41 @@ with st.sidebar:
 
 
 # ---------------------------------------------------------------------------
-# Career stages editor (custom per-row layout with insert-between buttons)
+# Career stages editor
 # ---------------------------------------------------------------------------
 st.subheader("Career stages")
 st.caption(
     "One row per phase of your career. Salary is flat within a stage in today's "
-    "dollars. Use the **＋** between rows to insert a stage at that point. "
-    "Use **＋ Add stage** at the bottom to append one."
+    "dollars. For a raise or role change, add another row at that age. "
+    "Press Tab or Enter after editing a cell to commit the change before "
+    "clicking buttons."
 )
 
-# Column widths used by both the header row and each stage row
-_COL_WEIGHTS = [1.1, 2.2, 2.2, 1.6, 1.8, 0.6]
-
-header_cols = st.columns(_COL_WEIGHTS)
-for col, title in zip(
-    header_cols[:-1],
-    ["Age", "Title", "Salary", "Contribution %", "Employer match %"],
-):
-    col.markdown(f"**{title}**")
-header_cols[-1].markdown("&nbsp;", unsafe_allow_html=True)
-
-
-def _render_insert_button(position: int, prev_id: str, next_id: str, hint_age: int) -> None:
-    """Render a centered + button that inserts a new stage at `position`."""
-    cols = st.columns([5, 1, 5])
-    with cols[1]:
-        if st.button(
-            "＋",
-            key=f"ins_{prev_id}_{next_id}",
-            help="Insert a stage here",
-            use_container_width=True,
-        ):
-            st.session_state.career_list.insert(position, _default_row(hint_age))
-            st.rerun()
-
-
-def _render_stage_row(idx: int, row: dict) -> None:
-    cols = st.columns(_COL_WEIGHTS)
-    rid = row["id"]
-    with cols[0]:
-        row["start_age"] = int(st.number_input(
-            "Age", min_value=14, max_value=90, value=int(row["start_age"]),
-            step=1, key=f"age_{rid}", label_visibility="collapsed", format="%d",
-        ))
-    with cols[1]:
-        row["title"] = st.text_input(
-            "Title", value=row.get("title", ""),
-            key=f"title_{rid}", label_visibility="collapsed",
-            placeholder="e.g. Senior Engineer",
-        )
-    with cols[2]:
-        row["salary"] = float(st.number_input(
-            "Salary", min_value=0.0, max_value=1e7,
-            value=float(row["salary"]), step=1000.0,
-            key=f"salary_{rid}", label_visibility="collapsed", format="%.0f",
-        ))
-    with cols[3]:
-        row["contribution_pct"] = float(st.number_input(
-            "Contribution %", min_value=0.0, max_value=90.0,
-            value=float(row["contribution_pct"]), step=1.0,
-            key=f"contrib_{rid}", label_visibility="collapsed", format="%.0f",
-        ))
-    with cols[4]:
-        row["employer_match_pct"] = float(st.number_input(
-            "Employer match %", min_value=0.0, max_value=15.0,
-            value=float(row["employer_match_pct"]), step=0.5,
-            key=f"match_{rid}", label_visibility="collapsed", format="%.1f",
-        ))
-    with cols[5]:
-        if st.button("🗑", key=f"del_{rid}", help="Delete this stage"):
-            st.session_state.career_list = [
-                r for r in st.session_state.career_list if r["id"] != rid
-            ]
-            for prefix in ("age_", "title_", "salary_", "contrib_", "match_"):
-                st.session_state.pop(f"{prefix}{rid}", None)
-            st.rerun()
-
-
-career_list = st.session_state.career_list
-for i, row in enumerate(career_list):
-    if i > 0:
-        prev_row = career_list[i - 1]
-        hint = (int(prev_row["start_age"]) + int(row["start_age"])) // 2
-        _render_insert_button(i, prev_row["id"], row["id"], hint)
-    _render_stage_row(i, row)
-
-# Append button below the list
-if st.button("＋ Add stage", key="add_stage_end"):
-    last_age = int(career_list[-1]["start_age"]) if career_list else 22
-    st.session_state.career_list.append(_default_row(last_age + 5))
-    st.rerun()
+edited_career_df = st.data_editor(
+    st.session_state.career_df_source,
+    num_rows="dynamic",
+    use_container_width=True,
+    key="career_editor",
+    column_config={
+        "start_age": st.column_config.NumberColumn(
+            "Age", min_value=14, max_value=90, step=1, format="%d",
+            help="Age at which this stage begins.",
+        ),
+        "title": st.column_config.TextColumn("Title"),
+        "salary": st.column_config.NumberColumn(
+            "Salary", min_value=0.0, step=1000.0, format="$%.0f",
+            help="Gross annual salary in today's dollars.",
+        ),
+        "contribution_pct": st.column_config.NumberColumn(
+            "Contribution %", min_value=0.0, max_value=90.0, step=1.0, format="%d%%",
+            help="Your savings rate as a percent (e.g. 15 = 15%). Assumes you save enough to get the full match.",
+        ),
+        "employer_match_pct": st.column_config.NumberColumn(
+            "Employer match %", min_value=0.0, max_value=15.0, step=0.5, format="%.1f%%",
+            help="Percent of salary your employer contributes (e.g. 5 = 5%). Most employers are in the 3-6% range.",
+        ),
+    },
+)
 
 
 # ---------------------------------------------------------------------------
@@ -342,10 +279,7 @@ with col_run:
 with col_save:
     scenario_name = st.text_input("Scenario name", value="my_plan", label_visibility="collapsed")
     if st.button("Save scenario", use_container_width=True):
-        inputs.career_stages = sorted(
-            [_row_to_stage(r) for r in st.session_state.career_list],
-            key=lambda s: s.start_age,
-        )
+        inputs.career_stages = _df_to_career_stages(edited_career_df)
         _save_scenario(scenario_name, inputs)
         st.success(f"Saved `{scenario_name}`")
 
@@ -359,15 +293,12 @@ with col_load:
             st.session_state.risk_profile = _match_risk_profile(
                 loaded.allocation_now, loaded.allocation_at_retirement
             )
-            _reset_career_list(loaded.career_stages)
+            _reset_career_editor(_career_stages_to_df(loaded.career_stages))
             st.rerun()
 
 
 if run:
-    inputs.career_stages = sorted(
-        [_row_to_stage(r) for r in st.session_state.career_list],
-        key=lambda s: s.start_age,
-    )
+    inputs.career_stages = _df_to_career_stages(edited_career_df)
     with st.spinner(f"Running {NUM_SIMULATIONS:,} simulations..."):
         result = run_simulation(inputs, ReturnModel())
     st.session_state.result = result
