@@ -177,30 +177,30 @@ with st.sidebar:
 
     st.subheader("Current balances")
     inputs.balance_taxable = st.number_input(
-        "Taxable brokerage", 0.0, 1e9,
-        float(inputs.balance_taxable), step=1000.0, format="$%.0f",
+        "$ Taxable brokerage", 0.0, 1e9,
+        float(inputs.balance_taxable), step=1000.0, format="%.0f",
     )
     inputs.balance_tax_deferred = st.number_input(
-        "Tax-deferred (401k/IRA)", 0.0, 1e9,
-        float(inputs.balance_tax_deferred), step=1000.0, format="$%.0f",
+        "$ Tax-deferred (401k/IRA)", 0.0, 1e9,
+        float(inputs.balance_tax_deferred), step=1000.0, format="%.0f",
     )
     inputs.balance_tax_free = st.number_input(
-        "Tax-free (Roth/HSA)", 0.0, 1e9,
-        float(inputs.balance_tax_free), step=1000.0, format="$%.0f",
+        "$ Tax-free (Roth/HSA)", 0.0, 1e9,
+        float(inputs.balance_tax_free), step=1000.0, format="%.0f",
     )
 
     st.subheader("Retirement")
     inputs.annual_retirement_spending = st.number_input(
-        "Annual spending (today's $)", 0.0, 1e7,
-        float(inputs.annual_retirement_spending), step=1000.0, format="$%.0f",
+        "$ Annual spending (today's dollars)", 0.0, 1e7,
+        float(inputs.annual_retirement_spending), step=1000.0, format="%.0f",
     )
     inputs.retirement_tax_rate = st.slider(
         "Effective retirement tax rate", 0.0, 0.50,
         float(inputs.retirement_tax_rate), 0.01,
     )
     inputs.social_security_annual = st.number_input(
-        "Social Security (annual, today's $)", 0.0, 200_000.0,
-        float(inputs.social_security_annual), step=500.0, format="$%.0f",
+        "$ Social Security (annual)", 0.0, 200_000.0,
+        float(inputs.social_security_annual), step=500.0, format="%.0f",
     )
     inputs.social_security_claim_age = st.number_input(
         "SS claim age", 62, 70, int(inputs.social_security_claim_age), format="%d",
