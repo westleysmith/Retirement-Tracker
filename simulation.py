@@ -17,7 +17,6 @@ import pandas as pd
 from models import (
     AssetAllocation,
     CareerStage,
-    LifeEvent,
     ScenarioInputs,
 )
 
@@ -53,7 +52,11 @@ def _interpolate_allocation(
 
 
 def _salary_at(age: int, stages: list[CareerStage]) -> tuple[float, CareerStage | None]:
-    """Return (salary_in_todays_dollars, stage) for the given age."""
+    """Return (salary_in_todays_dollars, stage) for the given age.
+
+    Flat within a stage. Returns the stage whose start_age is the most
+    recent one <= age.
+    """
     if not stages:
         return 0.0, None
     sorted_stages = sorted(stages, key=lambda s: s.start_age)
@@ -65,9 +68,7 @@ def _salary_at(age: int, stages: list[CareerStage]) -> tuple[float, CareerStage 
             break
     if active is None:
         return 0.0, None
-    years_in_stage = age - active.start_age
-    salary = active.salary * ((1 + active.real_growth_rate) ** years_in_stage)
-    return salary, active
+    return float(active.salary), active
 
 
 def _sample_asset_returns(
@@ -94,29 +95,6 @@ def _sample_asset_returns(
     return stock_ret, bond_ret, cash_ret
 
 
-def _life_event_cashflow(
-    age: int, events: list[LifeEvent]
-) -> float:
-    """Net cashflow at this age from life events (positive = windfall)."""
-    total = 0.0
-    for e in events:
-        hits = False
-        if e.event_type == "recurring_expense":
-            end = e.end_age if e.end_age is not None else e.age
-            if e.age <= age <= end:
-                hits = True
-        else:
-            if e.age == age:
-                hits = True
-        if not hits:
-            continue
-        if e.event_type == "windfall":
-            total += e.amount
-        else:
-            total -= e.amount
-    return total
-
-
 def run_simulation(
     inputs: ScenarioInputs,
     return_model: ReturnModel | None = None,
@@ -128,8 +106,8 @@ def run_simulation(
       - total_by_year: (n_sims, n_years) array of portfolio totals
       - success_rate: fraction of sims that reach end_age without depleting
       - final_balances: (n_sims,) array of ending balances
-      - median_path, p10_path, p90_path: percentile trajectories
-      - salary_by_age: deterministic salary projection
+      - paths_df: DataFrame with age / p10 / p50 / p90 / salary
+      - depleted: (n_sims,) boolean array
     """
     if return_model is None:
         return_model = ReturnModel()
@@ -139,21 +117,19 @@ def run_simulation(
     ages = np.arange(inputs.current_age, inputs.end_age + 1)
     n_years = len(ages)
 
-    # Balances as arrays of shape (n,)
-    taxable = np.full(n, inputs.balance_taxable, dtype=np.float64)
-    tax_deferred = np.full(n, inputs.balance_tax_deferred, dtype=np.float64)
-    tax_free = np.full(n, inputs.balance_tax_free, dtype=np.float64)
+    taxable = np.full(n, float(inputs.balance_taxable), dtype=np.float64)
+    tax_deferred = np.full(n, float(inputs.balance_tax_deferred), dtype=np.float64)
+    tax_free = np.full(n, float(inputs.balance_tax_free), dtype=np.float64)
 
     total_by_year = np.zeros((n, n_years))
     salary_by_age = np.zeros(n_years)
     depleted = np.zeros(n, dtype=bool)
 
     for i, age in enumerate(ages):
-        # --- Apply returns using the appropriate glide path allocation ---
         alloc = _interpolate_allocation(
             inputs.allocation_now,
             inputs.allocation_at_retirement,
-            age,
+            int(age),
             inputs.current_age,
             inputs.retirement_age,
         )
@@ -161,44 +137,37 @@ def run_simulation(
         portfolio_r = (
             alloc.stocks * stock_r + alloc.bonds * bond_r + alloc.cash * cash_r
         )
-        # Apply return to every account type (simplification: same allocation
-        # across tax buckets)
         growth = 1.0 + portfolio_r
         taxable *= growth
         tax_deferred *= growth
         tax_free *= growth
 
-        # --- Contributions while working ---
+        # Contributions while working
         if age < inputs.retirement_age:
             salary, stage = _salary_at(int(age), inputs.career_stages)
             salary_by_age[i] = salary
             if stage is not None and salary > 0:
-                employee_contrib = salary * stage.savings_rate
-                match = salary * min(stage.savings_rate, stage.employer_match_limit_pct) * (
-                    stage.employer_match_pct / max(stage.employer_match_limit_pct, 1e-9)
-                ) if stage.employer_match_limit_pct > 0 else 0.0
-                # Simplified routing: employee savings split 70/30 between
-                # tax_deferred and taxable; match goes to tax_deferred.
+                employee_contrib = salary * stage.contribution_pct
+                match = salary * stage.employer_match_pct
+                # Simplified routing: 70% of employee savings to tax-deferred,
+                # 30% to taxable; all employer match to tax-deferred.
                 tax_deferred += employee_contrib * 0.70 + match
                 taxable += employee_contrib * 0.30
 
-        # --- Retirement withdrawals (tax-aware order) ---
+        # Retirement withdrawals (tax-aware order)
         if age >= inputs.retirement_age:
             ss = (
-                inputs.social_security_annual
+                float(inputs.social_security_annual)
                 if age >= inputs.social_security_claim_age
                 else 0.0
             )
             need = float(max(0.0, inputs.annual_retirement_spending - ss))
-            # Gross up tax_deferred withdrawals for taxes
-            # Withdrawal order: taxable -> tax_deferred -> tax_free
             remaining = np.full(n, need, dtype=np.float64)
 
             take_taxable = np.minimum(taxable, remaining)
             taxable -= take_taxable
             remaining -= take_taxable
 
-            # For tax-deferred, we need gross withdrawal to cover net need
             if inputs.retirement_tax_rate < 0.999:
                 gross_needed = remaining / (1 - inputs.retirement_tax_rate)
             else:
@@ -212,32 +181,8 @@ def run_simulation(
             tax_free -= take_tax_free
             remaining -= take_tax_free
 
-            # Mark depleted sims
             depleted |= remaining > 1.0
 
-        # --- Life events ---
-        event_cf = _life_event_cashflow(int(age), inputs.life_events)
-        if event_cf > 0:
-            # Windfall goes to taxable
-            taxable += event_cf
-        elif event_cf < 0:
-            # Pull expense from taxable first, then tax_deferred (gross up)
-            need = np.full(n, float(-event_cf), dtype=np.float64)
-            take_tax = np.minimum(taxable, need)
-            taxable -= take_tax
-            need -= take_tax
-            if inputs.retirement_tax_rate < 0.999:
-                gross_needed = need / (1 - inputs.retirement_tax_rate)
-            else:
-                gross_needed = need * 1e9
-            take_td = np.minimum(tax_deferred, gross_needed)
-            tax_deferred -= take_td
-            net = take_td * (1 - inputs.retirement_tax_rate)
-            need -= net
-            take_tf = np.minimum(tax_free, need)
-            tax_free -= take_tf
-
-        # Clamp to zero (no negative balances)
         np.clip(taxable, 0, None, out=taxable)
         np.clip(tax_deferred, 0, None, out=tax_deferred)
         np.clip(tax_free, 0, None, out=tax_free)

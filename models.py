@@ -6,38 +6,22 @@ from typing import Literal
 
 
 AccountType = Literal["taxable", "tax_deferred", "tax_free"]
-EventType = Literal["expense", "windfall", "recurring_expense"]
 
 
 @dataclass
 class CareerStage:
-    """A phase of your career with a salary and savings rate.
+    """A phase of your career with a flat salary and contribution rates.
 
-    Salary is in today's dollars. Real growth is applied year-over-year within
-    a stage (on top of inflation, which the simulation handles by working in
-    real dollars throughout).
+    Salary is in today's dollars. Within a stage the salary is flat; add
+    another stage to model a raise or role change. Employer match is the
+    percentage of salary the employer contributes (assumes you contribute
+    enough to max the match).
     """
     start_age: int
-    label: str
+    title: str
     salary: float
-    real_growth_rate: float = 0.02
-    savings_rate: float = 0.15
+    contribution_pct: float = 0.15
     employer_match_pct: float = 0.05
-    employer_match_limit_pct: float = 0.05
-
-
-@dataclass
-class LifeEvent:
-    """A one-time or recurring cash flow event.
-
-    For a one-time event, set end_age == age. For recurring, set end_age
-    to the last year it applies.
-    """
-    age: int
-    label: str
-    amount: float
-    event_type: EventType = "expense"
-    end_age: int | None = None
 
 
 @dataclass
@@ -82,31 +66,27 @@ class ScenarioInputs:
     allocation_now: AssetAllocation = field(default_factory=lambda: AssetAllocation(0.90, 0.05, 0.05))
     allocation_at_retirement: AssetAllocation = field(default_factory=lambda: AssetAllocation(0.60, 0.35, 0.05))
 
-    # Career and life events
+    # Career stages
     career_stages: list[CareerStage] = field(default_factory=list)
-    life_events: list[LifeEvent] = field(default_factory=list)
 
     # Simulation settings
     num_simulations: int = 10_000
     seed: int | None = None
 
     def to_dict(self) -> dict:
-        d = asdict(self)
-        return d
+        return asdict(self)
 
     @staticmethod
     def from_dict(d: dict) -> "ScenarioInputs":
         career = [CareerStage(**s) for s in d.get("career_stages", [])]
-        events = [LifeEvent(**e) for e in d.get("life_events", [])]
         alloc_now = AssetAllocation(**d.get("allocation_now", {}))
         alloc_ret = AssetAllocation(**d.get("allocation_at_retirement", {}))
         base = {k: v for k, v in d.items() if k not in {
-            "career_stages", "life_events", "allocation_now", "allocation_at_retirement"
+            "career_stages", "allocation_now", "allocation_at_retirement"
         }}
         return ScenarioInputs(
             **base,
             career_stages=career,
-            life_events=events,
             allocation_now=alloc_now,
             allocation_at_retirement=alloc_ret,
         )
@@ -126,20 +106,11 @@ def default_scenario() -> ScenarioInputs:
         social_security_annual=25_000,
         social_security_claim_age=67,
         career_stages=[
-            CareerStage(start_age=30, label="Current role", salary=100_000,
-                        real_growth_rate=0.03, savings_rate=0.15,
-                        employer_match_pct=0.05, employer_match_limit_pct=0.05),
-            CareerStage(start_age=35, label="Senior role", salary=140_000,
-                        real_growth_rate=0.02, savings_rate=0.20,
-                        employer_match_pct=0.05, employer_match_limit_pct=0.05),
-            CareerStage(start_age=45, label="Late career", salary=180_000,
-                        real_growth_rate=0.01, savings_rate=0.25,
-                        employer_match_pct=0.05, employer_match_limit_pct=0.05),
-        ],
-        life_events=[
-            LifeEvent(age=32, label="Home down payment", amount=80_000, event_type="expense"),
-            LifeEvent(age=34, label="First child", amount=15_000,
-                      event_type="recurring_expense", end_age=52),
-            LifeEvent(age=50, label="Inheritance", amount=100_000, event_type="windfall"),
+            CareerStage(start_age=22, title="Entry level", salary=60_000,
+                        contribution_pct=0.10, employer_match_pct=0.04),
+            CareerStage(start_age=27, title="Mid level", salary=95_000,
+                        contribution_pct=0.15, employer_match_pct=0.05),
+            CareerStage(start_age=35, title="Senior", salary=140_000,
+                        contribution_pct=0.20, employer_match_pct=0.05),
         ],
     )
