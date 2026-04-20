@@ -83,6 +83,28 @@ if "pc_theme" not in st.session_state:
     st.session_state.pc_theme = "Auto"
 
 st.markdown(branding.build_css(st.session_state.pc_theme), unsafe_allow_html=True)
+
+# --- Top-right theme toggle ---
+_spacer, _t1, _t2, _t3 = st.columns([10, 1, 1, 1], gap="small")
+_THEME_BUTTONS = [
+    (_t1, "Light", "☀️", "Light mode"),
+    (_t2, "Dark", "🌙", "Dark mode"),
+    (_t3, "Auto", "🖥", "Match system"),
+]
+for _col, _mode, _icon, _help in _THEME_BUTTONS:
+    with _col:
+        _is_active = st.session_state.pc_theme == _mode
+        if st.button(
+            _icon,
+            key=f"theme_btn_{_mode}",
+            help=_help,
+            type="primary" if _is_active else "secondary",
+            use_container_width=True,
+        ):
+            if st.session_state.pc_theme != _mode:
+                st.session_state.pc_theme = _mode
+                st.rerun()
+
 st.markdown(branding.NAV_HTML, unsafe_allow_html=True)
 
 st.title("Retirement Tracker")
@@ -224,19 +246,6 @@ with st.sidebar:
     st.caption(preset["description"])
     st.caption(f"**Now:** {_fmt_alloc(preset['now'])}")
     st.caption(f"**At retirement:** {_fmt_alloc(preset['retirement'])}")
-
-    st.divider()
-    st.subheader("Appearance")
-    theme_choice = st.radio(
-        "Theme",
-        ["Auto", "Light", "Dark"],
-        index=["Auto", "Light", "Dark"].index(st.session_state.pc_theme),
-        horizontal=True,
-        label_visibility="collapsed",
-    )
-    if theme_choice != st.session_state.pc_theme:
-        st.session_state.pc_theme = theme_choice
-        st.rerun()
 
     # Simulation settings held constant: 10k sims, random seed.
     inputs.num_simulations = NUM_SIMULATIONS

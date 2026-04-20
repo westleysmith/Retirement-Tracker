@@ -1,11 +1,10 @@
 """Pocket Check brand styling for the Retirement Tracker Streamlit app.
 
-Colors and visual motifs mirror pocket-check-website's css/styles.css:
-navy nav, green accents, white surfaces in light mode / deep-navy surfaces in
-dark mode.
+Colors mirror pocket-check-website/css/styles.css: navy nav, green accents,
+white surfaces in light mode / deep-navy surfaces in dark mode.
 
-The theme is selectable at runtime via `build_css(mode)` where `mode` is one
-of "Light", "Dark", or "Auto" (system preference).
+`build_css(mode)` returns the full stylesheet for the requested mode, one of
+"Auto" (follow OS via prefers-color-scheme), "Light", or "Dark".
 """
 from __future__ import annotations
 
@@ -16,7 +15,7 @@ GREEN_DARK = "#27ae60"
 NAVY = "#0f1f2e"
 
 
-# --- Light-mode surface tokens (from pocket-check-website) ---
+# --- Light-mode surface tokens ---
 LIGHT_TOKENS = {
     "bg":      "#f9fafb",
     "surface": "#ffffff",
@@ -27,7 +26,7 @@ LIGHT_TOKENS = {
     "grid":    "rgba(0, 0, 0, 0.08)",
 }
 
-# --- Dark-mode surface tokens (derived, same hue family as NAVY) ---
+# --- Dark-mode surface tokens (same hue family as NAVY) ---
 DARK_TOKENS = {
     "bg":      "#0a1420",
     "surface": "#142538",
@@ -39,12 +38,16 @@ DARK_TOKENS = {
 }
 
 
-def plot_tokens(mode: str) -> dict:
-    """Return theme-appropriate Plotly colors for `mode` in {Light, Dark, Auto}."""
+def plot_tokens(mode: str, prefers_dark: bool = False) -> dict:
+    """Plotly colors for `mode`. If mode is Auto we fall back to light,
+    which the user can override with the explicit toggle if their OS is
+    dark but the charts still look off."""
     if mode == "Dark":
         t = DARK_TOKENS
-    else:
+    elif mode == "Light":
         t = LIGHT_TOKENS
+    else:
+        t = DARK_TOKENS if prefers_dark else LIGHT_TOKENS
     return {
         "font_color":  t["text"],
         "grid":        t["grid"],
@@ -57,71 +60,167 @@ def plot_tokens(mode: str) -> dict:
     }
 
 
-def _tokens_block(selector: str, tokens: dict) -> str:
-    """Render a CSS block that forces both our custom vars and Streamlit's
-    theme vars for the given selector."""
+def _vars_block(tokens: dict) -> str:
     return f"""
-{selector} {{
     --pc-bg: {tokens['bg']};
     --pc-surface: {tokens['surface']};
     --pc-text: {tokens['text']};
     --pc-muted: {tokens['muted']};
     --pc-border: {tokens['border']};
     --pc-heading: {tokens['heading']};
-    --background-color: {tokens['bg']};
-    --secondary-background-color: {tokens['surface']};
-    --text-color: {tokens['text']};
-}}
+"""
+
+
+# Aggressive overrides to force all Streamlit chrome (inputs, selects,
+# data editor, expanders, etc.) onto the active surface/text tokens.
+# These reference CSS vars, so they work for any mode once the vars are set.
+FORCED_OVERRIDES = """
+[data-testid="stApp"], body {
+    background-color: var(--pc-bg) !important;
+    color: var(--pc-text) !important;
+}
+section[data-testid="stSidebar"] {
+    background-color: var(--pc-surface) !important;
+}
+section[data-testid="stSidebar"] * {
+    color: var(--pc-text);
+}
+[data-testid="stMarkdownContainer"],
+[data-testid="stCaptionContainer"],
+[data-testid="stApp"] p,
+[data-testid="stApp"] label,
+[data-testid="stApp"] li {
+    color: var(--pc-text);
+}
+[data-testid="stCaptionContainer"], .stCaption {
+    color: var(--pc-muted) !important;
+}
+
+/* Inputs: text, number, textarea, date */
+.stTextInput input, .stNumberInput input, .stTextArea textarea,
+.stDateInput input,
+[data-baseweb="input"] input, [data-baseweb="input"] textarea,
+[data-baseweb="base-input"] input, [data-baseweb="base-input"] textarea {
+    background-color: var(--pc-surface) !important;
+    color: var(--pc-text) !important;
+    border-color: var(--pc-border) !important;
+    -webkit-text-fill-color: var(--pc-text) !important;
+}
+.stNumberInput [data-baseweb="input-container"],
+.stTextInput [data-baseweb="input-container"] {
+    background-color: var(--pc-surface) !important;
+    border-color: var(--pc-border) !important;
+}
+/* Number-input plus/minus buttons */
+.stNumberInput button {
+    background-color: var(--pc-surface) !important;
+    color: var(--pc-text) !important;
+    border-color: var(--pc-border) !important;
+}
+
+/* Selectbox: the visible control */
+.stSelectbox [data-baseweb="select"] > div,
+[data-baseweb="select"] > div {
+    background-color: var(--pc-surface) !important;
+    color: var(--pc-text) !important;
+    border-color: var(--pc-border) !important;
+}
+/* Selectbox dropdown menu (portal popover) */
+[data-baseweb="popover"] [role="listbox"],
+[data-baseweb="popover"] ul,
+[data-baseweb="menu"] {
+    background-color: var(--pc-surface) !important;
+    color: var(--pc-text) !important;
+    border-color: var(--pc-border) !important;
+}
+[data-baseweb="menu"] li,
+[data-baseweb="popover"] li {
+    background-color: var(--pc-surface) !important;
+    color: var(--pc-text) !important;
+}
+[data-baseweb="menu"] li:hover,
+[data-baseweb="popover"] li:hover {
+    background-color: var(--pc-bg) !important;
+}
+
+/* Radios */
+.stRadio label, .stRadio div {
+    color: var(--pc-text);
+}
+
+/* Slider track numbers */
+.stSlider [data-baseweb="slider"] span,
+.stSlider [data-baseweb="slider"] div {
+    color: var(--pc-text);
+}
+
+/* Expander */
+[data-testid="stExpander"] {
+    background-color: var(--pc-surface) !important;
+    border: 1px solid var(--pc-border) !important;
+    border-radius: 10px;
+}
+[data-testid="stExpander"] summary, [data-testid="stExpander"] details > summary {
+    color: var(--pc-text) !important;
+}
+[data-testid="stExpander"] div, [data-testid="stExpander"] p,
+[data-testid="stExpander"] li {
+    color: var(--pc-text);
+}
+
+/* Data editor (glide-data-grid) */
+[data-testid="stDataFrame"], [data-testid="stDataEditor"] {
+    background-color: var(--pc-surface) !important;
+    border-radius: 10px;
+    overflow: hidden;
+}
+[data-testid="stDataEditor"] canvas,
+[data-testid="stDataFrame"] canvas {
+    /* can't style canvas, but the container bg helps the edges blend */
+}
+
+/* Tooltips / info icons */
+[data-testid="stTooltipIcon"] {
+    color: var(--pc-muted) !important;
+}
+
+/* Alert boxes */
+[data-testid="stAlert"] {
+    background-color: var(--pc-surface) !important;
+    color: var(--pc-text) !important;
+    border-color: var(--pc-border) !important;
+}
+
+/* Divider */
+hr {
+    border-color: var(--pc-border) !important;
+}
 """
 
 
 def build_css(mode: str) -> str:
     """Build the full theme CSS for the requested mode.
 
-    `mode` is one of:
-      - "Light": force light surfaces, regardless of system preference
-      - "Dark":  force dark surfaces
-      - "Auto":  follow OS prefers-color-scheme
+    `mode` is one of "Auto", "Light", "Dark".
     """
-    light_css = _tokens_block(":root", LIGHT_TOKENS)
-    dark_css = _tokens_block(":root", DARK_TOKENS)
-
     if mode == "Light":
-        theme_vars = light_css
+        vars_css = f":root {{ {_vars_block(LIGHT_TOKENS)} }}"
     elif mode == "Dark":
-        theme_vars = dark_css
+        vars_css = f":root {{ {_vars_block(DARK_TOKENS)} }}"
     else:
-        # Auto: default to light, override under prefers-color-scheme: dark
-        theme_vars = light_css + f"""
-@media (prefers-color-scheme: dark) {{
-    {_tokens_block(":root", DARK_TOKENS).strip()}
-}}
-"""
-
-    forced_bg = "" if mode == "Auto" else f"""
-[data-testid="stApp"], body {{
-    background-color: var(--pc-bg) !important;
-    color: var(--pc-text) !important;
-}}
-section[data-testid="stSidebar"] {{
-    background-color: var(--pc-surface) !important;
-}}
-section[data-testid="stSidebar"] * {{
-    color: var(--pc-text);
-}}
-[data-testid="stApp"] p,
-[data-testid="stApp"] label,
-[data-testid="stApp"] span,
-[data-testid="stApp"] div {{
-    color: var(--pc-text);
-}}
-"""
+        # Auto: default to light, flip under prefers-color-scheme: dark
+        vars_css = (
+            f":root {{ {_vars_block(LIGHT_TOKENS)} }}\n"
+            f"@media (prefers-color-scheme: dark) {{\n"
+            f"  :root {{ {_vars_block(DARK_TOKENS)} }}\n"
+            f"}}"
+        )
 
     return f"""
 <style>
-{theme_vars}
+{vars_css}
 
-{forced_bg}
+{FORCED_OVERRIDES}
 
 /* ---- Base font ---- */
 html, body, [data-testid="stApp"] {{
@@ -220,12 +319,6 @@ a:hover {{
     text-decoration: underline;
 }}
 
-/* ---- Data editor rounded ---- */
-[data-testid="stDataFrame"], [data-testid="stDataEditor"] {{
-    border-radius: 10px;
-    overflow: hidden;
-}}
-
 /* ---- Branded nav bar (always navy+green — brand consistent) ---- */
 .pc-nav {{
     background: {NAVY};
@@ -265,25 +358,34 @@ a:hover {{
     padding: 4px 12px;
     border-radius: 100px;
 }}
+.pc-nav, .pc-nav * {{
+    color: #ffffff;
+}}
+.pc-nav-badge {{
+    color: {GREEN} !important;
+}}
 
 /* ---- Branded footer (always navy — brand consistent) ---- */
 .pc-footer {{
     background: {NAVY};
-    color: rgba(255, 255, 255, 0.6);
+    color: rgba(255, 255, 255, 0.6) !important;
     text-align: center;
     padding: 22px 20px;
     border-radius: 10px;
     margin-top: 40px;
     font-size: 0.85rem;
 }}
+.pc-footer, .pc-footer * {{
+    color: rgba(255, 255, 255, 0.75);
+}}
 .pc-footer a {{
-    color: rgba(255, 255, 255, 0.85) !important;
+    color: rgba(255, 255, 255, 0.9) !important;
 }}
 .pc-footer a:hover {{
     color: {GREEN} !important;
 }}
 .pc-footer .pc-foot-brand {{
-    color: #ffffff;
+    color: #ffffff !important;
     font-weight: 700;
 }}
 </style>
