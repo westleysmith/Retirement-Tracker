@@ -327,6 +327,11 @@ m4.metric("90th percentile final", f"${np.percentile(final, 90):,.0f}")
 plot = branding.plot_tokens()
 
 st.subheader("Portfolio trajectory (real dollars)")
+st.caption(
+    "The green band is your portfolio's range of outcomes across 10,000 simulations. "
+    "The **yellow dashed line** is the total you actually put in (starting balance + "
+    "contributions + employer match). The gap between yellow and green is compound growth."
+)
 fig = go.Figure()
 fig.add_trace(go.Scatter(
     x=paths["age"], y=paths["p90"],
@@ -340,6 +345,12 @@ fig.add_trace(go.Scatter(
 fig.add_trace(go.Scatter(
     x=paths["age"], y=paths["p50"],
     mode="lines", line=dict(width=3, color=plot["primary"]), name="Median",
+))
+fig.add_trace(go.Scatter(
+    x=paths["age"], y=paths["cumulative_contributions"],
+    mode="lines",
+    line=dict(width=2.5, color="#f1c40f", dash="dot"),
+    name="Total contributed",
 ))
 fig.add_vline(
     x=inputs.retirement_age, line_dash="dash",

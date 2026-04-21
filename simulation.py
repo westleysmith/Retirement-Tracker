@@ -123,6 +123,14 @@ def run_simulation(
 
     total_by_year = np.zeros((n, n_years))
     salary_by_age = np.zeros(n_years)
+    # Deterministic: total money put in per year (employee + employer match).
+    # Same across all sims, so we track as a 1D array.
+    contributions_by_age = np.zeros(n_years)
+    starting_balance = (
+        inputs.balance_taxable
+        + inputs.balance_tax_deferred
+        + inputs.balance_tax_free
+    )
     depleted = np.zeros(n, dtype=bool)
 
     for i, age in enumerate(ages):
@@ -153,6 +161,7 @@ def run_simulation(
                 # 30% to taxable; all employer match to tax-deferred.
                 tax_deferred += employee_contrib * 0.70 + match
                 taxable += employee_contrib * 0.30
+                contributions_by_age[i] = employee_contrib + match
 
         # Retirement withdrawals (tax-aware order)
         if age >= inputs.retirement_age:
@@ -196,12 +205,18 @@ def run_simulation(
     p50 = np.percentile(total_by_year, 50, axis=0)
     p90 = np.percentile(total_by_year, 90, axis=0)
 
+    # Cumulative money put in over time, including the starting balance as
+    # the "year zero" contribution. This is the "your money" baseline - the
+    # gap between this line and the portfolio value is compound growth.
+    cumulative_contributions = starting_balance + np.cumsum(contributions_by_age)
+
     df_paths = pd.DataFrame({
         "age": ages,
         "p10": p10,
         "p50": p50,
         "p90": p90,
         "salary": salary_by_age,
+        "cumulative_contributions": cumulative_contributions,
     })
 
     return {
